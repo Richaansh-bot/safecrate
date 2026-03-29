@@ -133,6 +133,14 @@ class SensitivityScorer:
         # Generate warnings
         warnings = self._generate_warnings(category_scores, checklist_results)
 
+        # Check for critical categories that should block posting
+        critical_categories = ["women_safety", "privacy", "harassment"]
+        has_critical = any(
+            category_scores.get(cat, RiskScore(cat, 0, "safe", "#22c55e")).risk_level
+            in ["high", "critical"]
+            for cat in critical_categories
+        )
+
         return {
             "overall_score": round(overall_score, 1),
             "overall_risk": overall_risk,
@@ -143,9 +151,10 @@ class SensitivityScorer:
             },
             "checklist_score": checklist_score,
             "warnings": warnings,
-            "can_post": overall_risk in ["safe", "low"],
-            "needs_review": overall_risk == "medium",
-            "do_not_post": overall_risk in ["high", "critical"],
+            "can_post": overall_risk in ["safe", "low"] and not has_critical,
+            "needs_review": overall_risk == "medium"
+            or (has_critical and overall_risk in ["safe", "low"]),
+            "do_not_post": overall_risk in ["high", "critical"] or has_critical,
         }
 
     def _get_verdict(
@@ -164,14 +173,21 @@ class SensitivityScorer:
             for cat in critical_categories
         )
 
-        if score >= 80 and not has_critical:
+        # If any critical category is HIGH/CRITICAL, always recommend not posting
+        if has_critical:
+            if score >= 60:
+                return "REVIEW RECOMMENDED"
+            else:
+                return "DO NOT POST"
+
+        if score >= 80:
             return "SAFE TO POST"
-        elif score >= 60 and not has_critical:
+        elif score >= 60:
             return "REVIEW RECOMMENDED"
         elif score >= 40:
             return "REVISIONS NEEDED"
         else:
-            return "DO NOT POST"
+            return "SAFE TO POST"
 
     def _generate_warnings(
         self, category_scores: Dict[str, RiskScore], checklist_results: Dict = None

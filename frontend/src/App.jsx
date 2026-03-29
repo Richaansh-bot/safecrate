@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Header from './components/Header'
 import HeroSection from './components/HeroSection'
 import VideoInput from './components/VideoInput'
@@ -7,177 +7,119 @@ import YouTubePreview from './components/YouTubePreview'
 import AnalysisDashboard from './components/AnalysisDashboard'
 import SafetyQuiz from './components/SafetyQuiz'
 import Footer from './components/Footer'
-
-// Sample analysis data (simulating backend analysis)
-const SAMPLE_ANALYSIS = {
-  women_safety: {
-    category: 'Women Safety',
-    score: 0.65,
-    risk_level: 'medium',
-    findings: ['Content may affect viewer comfort', 'Review portrayal of subjects'],
-    recommendations: ['Add content warning', 'Review for consent']
-  },
-  violence: {
-    category: 'Violence',
-    score: 0.2,
-    risk_level: 'low',
-    findings: [],
-    recommendations: []
-  },
-  sexual_content: {
-    category: 'Sexual Content',
-    score: 0.1,
-    risk_level: 'safe',
-    findings: [],
-    recommendations: []
-  },
-  harassment: {
-    category: 'Harassment',
-    score: 0.3,
-    risk_level: 'low',
-    findings: [],
-    recommendations: []
-  },
-  privacy: {
-    category: 'Privacy',
-    score: 0.5,
-    risk_level: 'medium',
-    findings: ['Personal locations may be visible'],
-    recommendations: ['Blur identifying information']
-  },
-  legal: {
-    category: 'Legal Compliance',
-    score: 0.7,
-    risk_level: 'low',
-    findings: [],
-    recommendations: ['Review IT Act compliance']
-  },
-  cultural_sensitivity: {
-    category: 'Cultural Sensitivity',
-    score: 0.15,
-    risk_level: 'safe',
-    findings: [],
-    recommendations: []
-  },
-  self_harm: {
-    category: 'Self-Harm',
-    score: 0.0,
-    risk_level: 'safe',
-    findings: [],
-    recommendations: []
-  },
-  dangerous_activities: {
-    category: 'Dangerous Activities',
-    score: 0.1,
-    risk_level: 'safe',
-    findings: [],
-    recommendations: []
-  },
-  misinformation: {
-    category: 'Misinformation',
-    score: 0.25,
-    risk_level: 'low',
-    findings: [],
-    recommendations: []
-  }
-}
-
-// Quick analysis based on content type
-const QUICK_ANALYSIS = {
-  youtube_video: {
-    women_safety: { score: 0.55, risk_level: 'medium', findings: ['Analyze video content'] },
-    violence: { score: 0.3, risk_level: 'low', findings: [] },
-    sexual_content: { score: 0.15, risk_level: 'safe', findings: [] },
-    harassment: { score: 0.25, risk_level: 'low', findings: [] },
-    privacy: { score: 0.4, risk_level: 'low', findings: ['Check for personal info'] },
-    legal: { score: 0.6, risk_level: 'low', findings: [] },
-    cultural_sensitivity: { score: 0.2, risk_level: 'safe', findings: [] },
-    self_harm: { score: 0.0, risk_level: 'safe', findings: [] },
-    dangerous_activities: { score: 0.15, risk_level: 'safe', findings: [] },
-    misinformation: { score: 0.1, risk_level: 'safe', findings: [] }
-  }
-}
+import { analyzeYouTube, analyzeText, healthCheck } from './api'
 
 function App() {
   const [activeTab, setActiveTab] = useState('analyzer')
-  const [inputMode, setInputMode] = useState('text') // 'text' or 'youtube'
+  const [inputMode, setInputMode] = useState('youtube')
   const [videoData, setVideoData] = useState(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [analysisResults, setAnalysisResults] = useState(null)
+  const [apiStatus, setApiStatus] = useState('checking')
 
-  const handleTextAnalyze = async (data) => {
-    setVideoData({ type: 'text', ...data })
-    setIsAnalyzing(true)
-    
-    await new Promise(resolve => setTimeout(resolve, 2000))
-    
-    const scores = Object.values(SAMPLE_ANALYSIS).map(s => s.score)
-    const overall = scores.reduce((a, b) => a + b, 0) / scores.length
-    
-    setAnalysisResults({
-      categories: SAMPLE_ANALYSIS,
-      overall: overall,
-      verdict: overall < 0.3 ? 'safe' : overall < 0.5 ? 'warning' : 'danger',
-      score: (overall * 100).toFixed(0)
-    })
-    
-    setIsAnalyzing(false)
-  }
+  // Check API status on mount
+  useEffect(() => {
+    const checkApi = async () => {
+      try {
+        const status = await healthCheck()
+        setApiStatus(status.status === 'healthy' ? 'online' : 'offline')
+      } catch {
+        setApiStatus('offline')
+      }
+    }
+    checkApi()
+    const interval = setInterval(checkApi, 30000) // Check every 30s
+    return () => clearInterval(interval)
+  }, [])
 
   const handleYouTubeAnalyze = async (data) => {
     setVideoData(data)
     setIsAnalyzing(true)
-    
-    // Simulate API call to backend
-    await new Promise(resolve => setTimeout(resolve, 3000))
-    
-    // Analyze based on quick check
-    const analysis = QUICK_ANALYSIS.youtube_video
-    
-    // Add category names
-    const categoryNames = {
-      women_safety: 'Women Safety',
-      violence: 'Violence',
-      sexual_content: 'Sexual Content',
-      harassment: 'Harassment',
-      privacy: 'Privacy',
-      legal: 'Legal Compliance',
-      cultural_sensitivity: 'Cultural Sensitivity',
-      self_harm: 'Self-Harm',
-      dangerous_activities: 'Dangerous Activities',
-      misinformation: 'Misinformation'
-    }
-    
-    const categories = {}
-    for (const [key, value] of Object.entries(analysis)) {
-      categories[key] = {
-        category: categoryNames[key],
-        ...value
+    setAnalysisResults(null)
+
+    try {
+      const result = await analyzeYouTube(data.url)
+      
+      if (result.success) {
+        // Transform API response to match frontend format
+        const categories = {}
+        if (result.analysis) {
+          for (const [key, cat] of Object.entries(result.analysis)) {
+            categories[key] = {
+              category: key.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()),
+              score: cat.score,
+              risk_level: cat.risk_level,
+              findings: cat.findings || [],
+              recommendations: cat.recommendations || []
+            }
+          }
+        }
+
+        setAnalysisResults({
+          categories,
+          overall: result.risk_score,
+          verdict: result.verdict === 'LIKELY SAFE' ? 'safe' : 
+                   result.verdict === 'CAUTION' ? 'warning' : 'danger',
+          score: Math.round(result.risk_score * 100),
+          quick_check: result.quick_check,
+          video_info: {
+            title: result.title,
+            channel: result.channel,
+            thumbnail: result.thumbnail,
+            video_id: result.video_id
+          }
+        })
+      } else {
+        alert(result.error || 'Analysis failed')
       }
+    } catch (error) {
+      alert('Failed to connect to analysis server. Make sure the server is running.')
+      console.error(error)
     }
-    
-    // Calculate overall
-    const scores = Object.values(categories).map(s => s.score)
-    const overall = scores.reduce((a, b) => a + b, 0) / scores.length
-    
-    setAnalysisResults({
-      categories,
-      overall,
-      verdict: overall < 0.3 ? 'safe' : overall < 0.5 ? 'warning' : 'danger',
-      score: (overall * 100).toFixed(0),
-      quick_check: {
-        risk_score: overall,
-        verdict: overall < 0.3 ? 'LIKELY SAFE' : overall < 0.5 ? 'CAUTION' : 'REVIEW NEEDED',
-        color: overall < 0.3 ? '#22c55e' : overall < 0.5 ? '#eab308' : '#f97316',
-        detected_keywords: ['video content'],
-        recommendation: overall < 0.3 
-          ? 'Content appears safe. Full analysis recommended.'
-          : overall < 0.5
-          ? 'Some risk factors detected. Review content.'
-          : 'Multiple risk factors. Manual review recommended.'
+
+    setIsAnalyzing(false)
+  }
+
+  const handleTextAnalyze = async (data) => {
+    setVideoData({ type: 'text', ...data })
+    setIsAnalyzing(true)
+    setAnalysisResults(null)
+
+    try {
+      const result = await analyzeText(
+        data.title,
+        data.description,
+        data.tags
+      )
+      
+      if (result.success) {
+        const categories = {}
+        if (result.analysis) {
+          for (const [key, cat] of Object.entries(result.analysis)) {
+            categories[key] = {
+              category: key.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()),
+              score: cat.score,
+              risk_level: cat.risk_level,
+              findings: cat.findings || [],
+              recommendations: cat.recommendations || []
+            }
+          }
+        }
+
+        setAnalysisResults({
+          categories,
+          overall: result.risk_score,
+          verdict: result.verdict === 'LIKELY SAFE' ? 'safe' : 
+                   result.verdict === 'CAUTION' ? 'warning' : 'danger',
+          score: Math.round(result.risk_score * 100),
+          quick_check: result.quick_check
+        })
       }
-    })
-    
+    } catch (error) {
+      alert('Failed to connect to analysis server. Make sure the server is running.')
+      console.error(error)
+    }
+
     setIsAnalyzing(false)
   }
 
@@ -189,13 +131,13 @@ function App() {
         <div className="max-w-6xl mx-auto">
           {activeTab === 'analyzer' && (
             <>
-              <HeroSection />
+              <HeroSection apiStatus={apiStatus} />
               
               {/* Input Mode Toggle */}
               <div className="flex justify-center mb-8">
                 <div className="inline-flex bg-white/10 rounded-xl p-1">
                   <button
-                    onClick={() => { setInputMode('youtube'); setAnalysisResults(null); }}
+                    onClick={() => { setInputMode('youtube'); setAnalysisResults(null); setVideoData(null); }}
                     className={`px-6 py-3 rounded-lg font-medium transition-all ${
                       inputMode === 'youtube'
                         ? 'bg-red-500/20 text-red-400'
@@ -210,7 +152,7 @@ function App() {
                     </span>
                   </button>
                   <button
-                    onClick={() => { setInputMode('text'); setAnalysisResults(null); }}
+                    onClick={() => { setInputMode('text'); setAnalysisResults(null); setVideoData(null); }}
                     className={`px-6 py-3 rounded-lg font-medium transition-all ${
                       inputMode === 'text'
                         ? 'bg-emerald-500/20 text-emerald-400'

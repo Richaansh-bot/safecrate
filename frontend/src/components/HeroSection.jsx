@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 
-export default function HeroSection() {
+export default function HeroSection({ apiStatus = 'checking' }) {
   return (
     <section className="text-center py-16 animate-fadeIn">
       <motion.div
@@ -9,10 +9,16 @@ export default function HeroSection() {
         transition={{ delay: 0.1 }}
         className="mb-6"
       >
-        <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 text-emerald-400 text-sm font-medium">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          Made for Indian Content Creators
-        </span>
+        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 text-emerald-400 text-sm font-medium">
+          <span className={`w-2 h-2 rounded-full ${
+            apiStatus === 'online' ? 'bg-emerald-500 animate-pulse' : 
+            apiStatus === 'checking' ? 'bg-amber-500 animate-pulse' : 
+            'bg-red-500'
+          }`} />
+          {apiStatus === 'online' ? 'Server Online - Analysis Ready' :
+           apiStatus === 'checking' ? 'Connecting to Server...' :
+           'Server Offline - Demo Mode'}
+        </div>
       </motion.div>
 
       <motion.h1

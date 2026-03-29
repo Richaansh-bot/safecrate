@@ -1,45 +1,97 @@
 # Safecrate - Content Safety Validator
 
-A comprehensive content safety analysis tool for Indian content creators, with special focus on women's safety.
+A real-time content safety analysis tool for Indian content creators. Paste a YouTube link or enter video details to get instant safety analysis.
+
+## 🚀 Quick Start
+
+### Windows
+```bash
+start.bat
+```
+
+### Linux/Mac
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+### Manual Start
+```bash
+# Terminal 1 - API Server
+pip install fastapi uvicorn httpx
+python server.py
+
+# Terminal 2 - Frontend
+cd frontend
+npm install
+npm run dev
+```
+
+Then open **http://localhost:5173**
 
 ## Features
 
-- **Multi-Category Analysis**: Violence, sexual content, harassment, privacy, and more
-- **Women's Safety Focus**: Special analyzer for women's safety in Indian context
-- **Legal Compliance**: IT Act, IPC, POSH Act checks
-- **Quick Quiz**: 10-question safety assessment
-- **Compliance Reports**: Exportable reports for creators
+- **YouTube URL Analysis** - Paste any YouTube link for instant safety check
+- **Text Input** - Enter video title, description, and tags for analysis
+- **10 Safety Categories**:
+  - 👩 Women Safety
+  - ⚔️ Violence
+  - 🔞 Sexual Content
+  - ⚠️ Harassment
+  - 🔒 Privacy
+  - ⚖️ Legal Compliance (IT Act, IPC)
+  - 🕌 Cultural Sensitivity
+  - 💔 Self-Harm
+  - ⚡ Dangerous Activities
+  - 📢 Misinformation
 
-## Quick Start
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/analyze/youtube` | POST | Analyze YouTube video URL |
+| `/api/analyze/text` | POST | Analyze video details |
+| `/api/quick-check` | GET | Validate YouTube URL |
+| `/api/health` | GET | Server health check |
+
+### Example API Usage
 
 ```bash
-cd safecrate
-pip install -e .
-python demo.py
+# Analyze YouTube video
+curl -X POST http://localhost:8000/api/analyze/youtube \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.youtube.com/watch?v=..."}'
+
+# Analyze text
+curl -X POST http://localhost:8000/api/analyze/text \
+  -H "Content-Type: application/json" \
+  -d '{"title": "My Video", "description": "...", "tags": ["vlog"]}'
 ```
 
-## Usage
+## For Developers
 
-```python
-from safecrate import ContentAnalyzer, SensitivityScorer
-
-# Analyze content
-analyzer = ContentAnalyzer()
-results = analyzer.analyze(metadata=video_metadata)
-
-# Calculate overall risk
-scorer = SensitivityScorer()
-score = scorer.calculate_score(results)
+### Project Structure
+```
+safecrate/
+├── server.py              # FastAPI backend server
+├── safecrate/            # Analysis modules
+│   ├── analyzer.py       # Content analysis engine
+│   ├── scorer.py         # Sensitivity scoring
+│   ├── compliance.py     # Indian law compliance
+│   └── youtube/          # YouTube integration
+├── frontend/             # React frontend
+│   └── src/
+│       ├── App.jsx       # Main app
+│       ├── api.js        # API service
+│       └── components/   # UI components
+└── start.py             # Launcher script
 ```
 
-## For Content Creators
+### Tech Stack
+- **Backend**: FastAPI, Python
+- **Frontend**: React, Tailwind CSS, Framer Motion
+- **Analysis**: Custom NLP-based safety scoring
 
-Safecrate helps you:
-1. Check if your content is safe to post
-2. Ensure compliance with Indian laws
-3. Protect women's safety and dignity
-4. Get actionable recommendations
+## License
 
-## Legal Disclaimer
-
-This tool provides guidance only and does not constitute legal advice. Always consult a qualified lawyer for legal matters.
+MIT - Built for Indian content creators with ❤️
