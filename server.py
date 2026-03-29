@@ -26,7 +26,7 @@ except ImportError as e:
     YT_DLP_AVAILABLE = False
     print(f"[INIT] Warning: yt-dlp not installed. Using fallback mode. Error: {e}")
 
-# AssemblyAI for transcription
+# AssemblyAI for transcription (optional)
 try:
     import assemblyai as aai
 
@@ -34,16 +34,30 @@ try:
     print("[INIT] AssemblyAI SDK imported successfully")
 except ImportError as e:
     ASSEMBLYAI_AVAILABLE = False
-    print(f"[INIT] Warning: AssemblyAI not installed. {e}")
+    print(f"[INIT] AssemblyAI not installed. {e}")
 
 # Get API key from environment or use demo
 ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY", "")
 if ASSEMBLYAI_API_KEY:
     print(f"[INIT] AssemblyAI API key found")
-else:
-    print(
-        "[INIT] AssemblyAI API key not set. Set ASSEMBLYAI_API_KEY env var for transcripts"
-    )
+
+# Whisper for local transcription (free, unlimited)
+try:
+    from faster_whisper import WhisperModel
+
+    WHISPER_AVAILABLE = True
+    print("[INIT] faster-whisper imported successfully")
+except ImportError as e:
+    WHISPER_AVAILABLE = False
+    print(f"[INIT] Warning: faster-whisper not installed. {e}")
+
+# Whisper model instance (lazy loaded)
+whisper_model = None
+
+# Transcription settings
+WHISPER_MODEL_SIZE = os.environ.get(
+    "WHISPER_MODEL", "tiny"
+)  # tiny (~75MB, fastest), base (~140MB), small (~500MB)
 
 # Import analysis modules
 import sys
@@ -81,6 +95,8 @@ analysis_results = {}
 
 class YouTubeAnalysisRequest(BaseModel):
     url: str
+    transcript: Optional[str] = None  # Optional manual transcript
+    use_whisper: bool = False  # Opt-in for Whisper (slow on CPU)
 
 
 class VideoAnalysisRequest(BaseModel):
@@ -329,6 +345,108 @@ def parse_vtt_to_text(vtt_content: str) -> str:
     return " ".join(text_lines)
 
 
+async def fetch_transcript_whisper(video_url: str) -> tuple[str, bool]:
+    """
+    Fetch transcript using local Whisper model (free, unlimited).
+    Downloads audio from YouTube and transcribes using faster-whisper.
+    """
+    global whisper_model
+
+    if not WHISPER_AVAILABLE:
+        return "", False
+
+    import tempfile
+
+    transcript_text = ""
+    success = False
+    temp_audio_path = None
+
+    try:
+        print(f"[WHISPER] Starting transcription for: {video_url}")
+
+        # Lazy load the Whisper model
+        if whisper_model is None:
+            print(
+                f"[WHISPER] Loading model: {WHISPER_MODEL_SIZE} (first time, ~140MB download)"
+            )
+            whisper_model = WhisperModel(
+                WHISPER_MODEL_SIZE,
+                device="cpu",  # Use CPU (cross-platform compatible)
+                compute_type="int8",  # Fast inference
+            )
+            print("[WHISPER] Model loaded successfully")
+
+        # Download audio from YouTube
+        print("[WHISPER] Downloading audio from YouTube...")
+
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": "%(id)s.%(ext)s",
+            "quiet": True,
+            "no_warnings": True,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ydl_opts["outtmpl"] = os.path.join(temp_dir, "%(id)s.%(ext)s")
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                if info:
+                    audio_path = ydl.prepare_filename(info)
+                    # Find the mp3 file
+                    mp3_path = audio_path.rsplit(".", 1)[0] + ".mp3"
+
+                    if os.path.exists(mp3_path):
+                        temp_audio_path = mp3_path
+                        print(f"[WHISPER] Audio downloaded: {mp3_path}")
+
+                        # Transcribe with Whisper (optimized for speed)
+                        # Only transcribe first 60 seconds for speed
+                        print(
+                            "[WHISPER] Transcribing audio (first 60 seconds for speed)..."
+                        )
+                        segments, info = whisper_model.transcribe(
+                            mp3_path,
+                            language="en",  # Primary language
+                            task="transcribe",
+                            beam_size=1,  # Faster
+                            vad_filter=False,  # Disable for speed
+                            initial_prompt="This is a video that may contain speech.",
+                            max_new_tokens=500,  # Limit output for speed
+                        )
+
+                        # Collect all segments
+                        full_text = []
+                        segment_count = 0
+                        for segment in segments:
+                            full_text.append(segment.text)
+                            segment_count += 1
+                            if segment_count % 20 == 0:
+                                print(
+                                    f"[WHISPER] Processed {segment_count} segments..."
+                                )
+
+                        transcript_text = " ".join(full_text)
+                        success = len(transcript_text) > 0
+                        print(
+                            f"[WHISPER] Transcription complete: {len(transcript_text)} chars, {segment_count} segments"
+                        )
+
+    except Exception as e:
+        print(f"[WHISPER] Error: {e}")
+        transcript_text = ""
+        success = False
+
+    return transcript_text.strip(), success
+
+
 async def fetch_transcript_assemblyai(video_url: str) -> tuple[str, bool]:
     """
     Fetch transcript using AssemblyAI API.
@@ -495,13 +613,38 @@ async def analyze_youtube(request: YouTubeAnalysisRequest):
             if keyword in title_lower:
                 tags.append(keyword)
 
-        # Fetch transcript - Try AssemblyAI first (better quality), then yt-dlp fallback
+        # Fetch transcript
         transcript = ""
         transcript_fetched = False
         transcript_source = "none"
 
-        # Try AssemblyAI first if API key is available
-        if ASSEMBLYAI_AVAILABLE and ASSEMBLYAI_API_KEY:
+        # 1. Use manual transcript if provided
+        if request.transcript:
+            transcript = request.transcript
+            transcript_fetched = True
+            transcript_source = "manual"
+            print(f"[TRANSCRIPT] Using manual transcript: {len(transcript)} chars")
+
+        # 2. Try Whisper only if explicitly requested (slow on CPU)
+        elif request.use_whisper and WHISPER_AVAILABLE:
+            print(
+                f"[TRANSCRIPT] Whisper requested - this may take 1-5 minutes on CPU..."
+            )
+            transcript, transcript_fetched = await fetch_transcript_whisper(request.url)
+            if transcript_fetched:
+                transcript_source = "whisper"
+                print(f"[TRANSCRIPT] Whisper success: {len(transcript)} chars")
+
+        # 3. Try yt-dlp subtitles (may be rate limited)
+        elif not transcript_fetched and YT_DLP_AVAILABLE:
+            print(f"[TRANSCRIPT] Trying yt-dlp subtitles for: {request.url}")
+            transcript, transcript_fetched = fetch_youtube_transcript(request.url)
+            if transcript_fetched:
+                transcript_source = "ytdlp"
+                print(f"[TRANSCRIPT] yt-dlp success: {len(transcript)} chars")
+
+        # 4. Fall back to AssemblyAI if available
+        if not transcript_fetched and ASSEMBLYAI_AVAILABLE and ASSEMBLYAI_API_KEY:
             print(f"[TRANSCRIPT] Trying AssemblyAI for: {request.url}")
             transcript, transcript_fetched = await fetch_transcript_assemblyai(
                 request.url
@@ -509,19 +652,11 @@ async def analyze_youtube(request: YouTubeAnalysisRequest):
             if transcript_fetched:
                 transcript_source = "assemblyai"
                 print(f"[TRANSCRIPT] AssemblyAI success: {len(transcript)} chars")
-            else:
-                print("[TRANSCRIPT] AssemblyAI failed, trying yt-dlp...")
-
-        # Fall back to yt-dlp if AssemblyAI didn't work
-        if not transcript_fetched and YT_DLP_AVAILABLE:
-            print(f"[TRANSCRIPT] Trying yt-dlp for: {request.url}")
-            transcript, transcript_fetched = fetch_youtube_transcript(request.url)
-            if transcript_fetched:
-                transcript_source = "ytdlp"
-                print(f"[TRANSCRIPT] yt-dlp success: {len(transcript)} chars")
 
         if not transcript_fetched:
-            print("[TRANSCRIPT] No transcript available for this video")
+            print(
+                "[TRANSCRIPT] No transcript available. Analysis based on metadata only."
+            )
 
         # Run analysis with transcript
         analysis = analyze_youtube_content(
@@ -612,9 +747,11 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "yt_dlp_available": YT_DLP_AVAILABLE,
+        "whisper_available": WHISPER_AVAILABLE,
+        "whisper_model": WHISPER_MODEL_SIZE if WHISPER_AVAILABLE else None,
         "assemblyai_available": ASSEMBLYAI_AVAILABLE,
         "assemblyai_configured": bool(ASSEMBLYAI_API_KEY),
-        "transcription_enabled": ASSEMBLYAI_AVAILABLE and bool(ASSEMBLYAI_API_KEY),
+        "subtitle_capable": YT_DLP_AVAILABLE,  # Can fetch YouTube subtitles if not rate limited
     }
 
 
