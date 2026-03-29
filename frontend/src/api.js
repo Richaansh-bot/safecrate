@@ -3,7 +3,7 @@
  * Handles all API calls to the backend
  */
 
-const API_BASE = 'http://localhost:8001/api'
+const API_BASE = 'http://localhost:8080/api'
 
 export async function analyzeYouTube(url, transcript = null) {
   try {

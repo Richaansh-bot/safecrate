@@ -555,8 +555,35 @@ async def root():
     """Serve the frontend."""
     index_path = Path(__file__).parent / "frontend" / "dist" / "index.html"
     if index_path.exists():
-        return FileResponse(str(index_path))
+        return FileResponse(str(index_path), media_type="text/html")
     return {"message": "Safecrate API is running. Build frontend for full UI."}
+
+
+@app.get("/assets/{filename}")
+async def serve_assets(filename: str):
+    """Serve frontend assets."""
+    dist_dir = Path(__file__).parent / "frontend" / "dist" / "assets"
+    file_path = dist_dir / filename
+
+    if file_path.exists() and file_path.is_file():
+        # Determine content type
+        if filename.endswith(".js"):
+            return FileResponse(str(file_path), media_type="application/javascript")
+        elif filename.endswith(".css"):
+            return FileResponse(str(file_path), media_type="text/css")
+        else:
+            return FileResponse(str(file_path))
+
+    return {"error": "Not found"}, 404
+
+
+@app.get("/shield.svg")
+async def serve_favicon():
+    """Serve favicon."""
+    favicon_path = Path(__file__).parent / "frontend" / "dist" / "shield.svg"
+    if favicon_path.exists():
+        return FileResponse(str(favicon_path), media_type="image/svg+xml")
+    return {"error": "Not found"}, 404
 
 
 @app.post("/api/analyze/youtube", response_model=AnalysisResponse)
@@ -778,7 +805,7 @@ if __name__ == "__main__":
     print("=" * 50)
     print(f"yt-dlp available: {YT_DLP_AVAILABLE}")
     print("Starting server...")
-    print("API Docs: http://localhost:8001/docs")
-    print("Frontend: http://localhost:8001")
+    print("API Docs: http://localhost:8080/docs")
+    print("Frontend: http://localhost:8080")
     print("=" * 50)
-    uvicorn.run(app, host="0.0.0.0", port=8001, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=8080, reload=False)
