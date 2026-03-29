@@ -50,7 +50,8 @@ function App() {
               score: cat.score,
               risk_level: cat.risk_level,
               findings: cat.findings || [],
-              recommendations: cat.recommendations || []
+              recommendations: cat.recommendations || [],
+              evidence: cat.evidence || []
             }
           }
         }
