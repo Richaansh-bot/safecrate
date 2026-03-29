@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion'
+import EvidenceTimeline from './EvidenceTimeline'
 
 const CATEGORY_ICONS = {
   women_safety: '👩',
@@ -149,6 +150,11 @@ export default function AnalysisDashboard({ videoData, results }) {
                         </p>
                       ))}
                     </div>
+                  )}
+
+                  {/* Evidence Timeline */}
+                  {data.evidence && data.evidence.length > 0 && (
+                    <EvidenceTimeline evidence={data.evidence} />
                   )}
                 </motion.div>
               )

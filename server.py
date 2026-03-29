@@ -524,9 +524,16 @@ def analyze_youtube_content(
                 if hasattr(result.risk_level, "value")
                 else str(result.risk_level)
             )
+            # Get evidence if available
+            evidence = []
+            if hasattr(result, "evidence"):
+                evidence = [e.to_dict() for e in result.evidence]
+            elif hasattr(result, "to_dict"):
+                evidence = result.to_dict().get("evidence", [])
         else:
             score = result.get("score", 0)
             risk = result.get("risk_level", "safe")
+            evidence = result.get("evidence", [])
 
         categories[cat_key] = {
             "score": score,
@@ -534,6 +541,7 @@ def analyze_youtube_content(
             "findings": result.findings
             if hasattr(result, "findings")
             else result.get("findings", []),
+            "evidence": evidence,
             "recommendations": result.recommendations
             if hasattr(result, "recommendations")
             else result.get("recommendations", []),

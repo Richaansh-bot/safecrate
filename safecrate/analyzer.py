@@ -51,11 +51,34 @@ class ContentCategory(Enum):
 
 
 @dataclass
+class Evidence:
+    """Represents a single piece of evidence that contributed to the analysis."""
+
+    keyword: str
+    location: str  # "title", "description", "tags", "transcript"
+    context: str  # The text snippet containing the keyword
+    weight: float  # How much this contributed to the score
+    severity: str = "medium"  # "low", "medium", "high", "critical"
+
+    def to_dict(self) -> dict:
+        return {
+            "keyword": self.keyword,
+            "location": self.location,
+            "context": self.context[:200] + "..."
+            if len(self.context) > 200
+            else self.context,
+            "weight": round(self.weight * 100, 1),
+            "severity": self.severity,
+        }
+
+
+@dataclass
 class AnalysisResult:
     category: ContentCategory
     score: float  # 0.0 to 1.0
     risk_level: RiskLevel
     findings: List[str] = field(default_factory=list)
+    evidence: List[Evidence] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
     timestamp: str = ""
 
@@ -70,6 +93,17 @@ class AnalysisResult:
             self.risk_level = RiskLevel.HIGH
         else:
             self.risk_level = RiskLevel.CRITICAL
+
+    def to_dict(self) -> dict:
+        return {
+            "category": self.category.value,
+            "score": self.score,
+            "risk_level": self.risk_level.value,
+            "findings": self.findings,
+            "evidence": [e.to_dict() for e in self.evidence],
+            "recommendations": self.recommendations,
+            "total_evidence_count": len(self.evidence),
+        }
 
 
 @dataclass
@@ -283,36 +317,80 @@ class BaseAnalyzer:
 
 
 class ViolenceAnalyzer(BaseAnalyzer):
+    def _get_context(self, text: str, keyword: str, window: int = 50) -> str:
+        """Extract context around a keyword."""
+        text_lower = text.lower()
+        idx = text_lower.find(keyword.lower())
+        if idx == -1:
+            return keyword
+        start = max(0, idx - window)
+        end = min(len(text), idx + len(keyword) + window)
+        context = text[start:end].strip()
+        return "..." + context + "..." if start > 0 or end < len(text) else context
+
     def analyze(
         self, metadata: Optional[VideoMetadata], data: Optional[Dict]
     ) -> AnalysisResult:
         score = 0.0
         findings = []
+        evidence = []
 
-        text_content = ""
+        # Prepare text sources
+        sources = {}
         if metadata:
-            text_content = (
-                f"{metadata.title} {metadata.description} {' '.join(metadata.tags)}"
-            )
-
+            if metadata.title:
+                sources["title"] = metadata.title
+            if metadata.description:
+                sources["description"] = metadata.description
+            if metadata.tags:
+                sources["tags"] = ", ".join(metadata.tags)
         if data and "transcript" in data:
-            text_content += " " + data["transcript"]
+            sources["transcript"] = data["transcript"]
 
-        text_lower = text_content.lower()
+        # Check for violence indicators in each source
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in self.VIOLENCE_KEYWORDS:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.15,
+                        severity="medium"
+                        if keyword in ["fight", "punch", "slap"]
+                        else "high",
+                    )
+                    evidence.append(ev)
+                    findings.append(f"Found '{keyword}' in {location}")
 
-        # Check for violence indicators
-        violence_count = sum(1 for kw in self.VIOLENCE_KEYWORDS if kw in text_lower)
+        violence_count = len(evidence)
         if violence_count >= 3:
             score = min(1.0, 0.4 + (violence_count - 3) * 0.1)
-            findings.append(
-                f"Multiple violence-related terms detected ({violence_count})"
-            )
+        elif violence_count > 0:
+            score = min(0.6, violence_count * 0.15)
 
         # Check for graphic content indicators
+        graphic_evidence = []
         graphic_indicators = ["blood", "gore", "graphic", "warning", "disturbing"]
-        if any(ind in text_lower for ind in graphic_indicators):
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in graphic_indicators:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.2,
+                        severity="high",
+                    )
+                    graphic_evidence.append(ev)
+                    findings.append(f"Graphic indicator '{keyword}' in {location}")
+        if graphic_evidence:
             score = max(score, 0.6)
-            findings.append("Graphic content warning detected")
+            evidence.extend(graphic_evidence)
 
         # Recommendations
         recommendations = []
@@ -326,36 +404,65 @@ class ViolenceAnalyzer(BaseAnalyzer):
             score=score,
             risk_level=RiskLevel.SAFE,
             findings=findings,
+            evidence=evidence,
             recommendations=recommendations,
         )
 
 
 class SexualContentAnalyzer(BaseAnalyzer):
+    def _get_context(self, text: str, keyword: str, window: int = 50) -> str:
+        text_lower = text.lower()
+        idx = text_lower.find(keyword.lower())
+        if idx == -1:
+            return keyword
+        start = max(0, idx - window)
+        end = min(len(text), idx + len(keyword) + window)
+        context = text[start:end].strip()
+        return "..." + context + "..." if start > 0 or end < len(text) else context
+
     def analyze(
         self, metadata: Optional[VideoMetadata], data: Optional[Dict]
     ) -> AnalysisResult:
         score = 0.0
         findings = []
+        evidence = []
 
-        text_content = ""
+        # Prepare text sources
+        sources = {}
         if metadata:
-            text_content = (
-                f"{metadata.title} {metadata.description} {' '.join(metadata.tags)}"
-            )
-
-        # Also check transcript if available
+            if metadata.title:
+                sources["title"] = metadata.title
+            if metadata.description:
+                sources["description"] = metadata.description
+            if metadata.tags:
+                sources["tags"] = ", ".join(metadata.tags)
         if data and "transcript" in data:
-            text_content += " " + data["transcript"]
-
-        text_lower = text_content.lower()
+            sources["transcript"] = data["transcript"]
 
         # Check for sexual content indicators
-        sexual_count = sum(1 for kw in self.SEXUAL_KEYWORDS if kw in text_lower)
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in self.SEXUAL_KEYWORDS:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    severity = (
+                        "high"
+                        if keyword in ["porn", "nude", "naked", "sex"]
+                        else "medium"
+                    )
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.2,
+                        severity=severity,
+                    )
+                    evidence.append(ev)
+                    findings.append(f"Found '{keyword}' in {location}")
+
+        sexual_count = len(evidence)
         if sexual_count >= 1:
             score = min(1.0, 0.5 + sexual_count * 0.15)
-            findings.append(
-                f"Sexual content indicators detected ({sexual_count} terms)"
-            )
 
         # Age-restricted indicators
         age_restricted = [
@@ -365,9 +472,24 @@ class SexualContentAnalyzer(BaseAnalyzer):
             "parental guidance",
             "explicit content",
         ]
-        if any(ind in text_lower for ind in age_restricted):
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in age_restricted:
+                if keyword.lower() in text_lower:
+                    context = self._get_context(text, keyword)
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.15,
+                        severity="medium",
+                    )
+                    evidence.append(ev)
+                    findings.append(f"Age-restricted marker '{keyword}' in {location}")
+        if any(
+            kw.lower() in " ".join(sources.values()).lower() for kw in age_restricted
+        ):
             score = max(score, 0.4)
-            findings.append("Age-restricted content markers found")
 
         recommendations = []
         if score > 0.3:
@@ -380,42 +502,87 @@ class SexualContentAnalyzer(BaseAnalyzer):
             score=score,
             risk_level=RiskLevel.SAFE,
             findings=findings,
+            evidence=evidence,
             recommendations=recommendations,
         )
 
 
 class HarassmentAnalyzer(BaseAnalyzer):
+    def _get_context(self, text: str, keyword: str, window: int = 50) -> str:
+        text_lower = text.lower()
+        idx = text_lower.find(keyword.lower())
+        if idx == -1:
+            return keyword
+        start = max(0, idx - window)
+        end = min(len(text), idx + len(keyword) + window)
+        context = text[start:end].strip()
+        return "..." + context + "..." if start > 0 or end < len(text) else context
+
     def analyze(
         self, metadata: Optional[VideoMetadata], data: Optional[Dict]
     ) -> AnalysisResult:
         score = 0.0
         findings = []
+        evidence = []
 
-        text_content = ""
+        # Prepare text sources
+        sources = {}
         if metadata:
-            text_content = (
-                f"{metadata.title} {metadata.description} {' '.join(metadata.tags)}"
-            )
-
-        # Also check transcript if available
+            if metadata.title:
+                sources["title"] = metadata.title
+            if metadata.description:
+                sources["description"] = metadata.description
+            if metadata.tags:
+                sources["tags"] = ", ".join(metadata.tags)
         if data and "transcript" in data:
-            text_content += " " + data["transcript"]
-
-        text_lower = text_content.lower()
+            sources["transcript"] = data["transcript"]
 
         # Check for harassment indicators
-        harassment_count = sum(1 for kw in self.HARASSMENT_KEYWORDS if kw in text_lower)
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in self.HARASSMENT_KEYWORDS:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    severity = (
+                        "high"
+                        if keyword in ["rape", "molest", "slut", "whore"]
+                        else "medium"
+                    )
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.2,
+                        severity=severity,
+                    )
+                    evidence.append(ev)
+                    findings.append(f"Found '{keyword}' in {location}")
+
+        harassment_count = len(evidence)
         if harassment_count >= 1:
             score = min(1.0, 0.6 + harassment_count * 0.1)
-            findings.append(
-                f"Potential harassment language detected ({harassment_count} terms)"
-            )
 
         # Targeting indicators
         targeting = ["against", "target", "expose", "call out", "shame"]
-        if any(ind in text_lower for ind in targeting):
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in targeting:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.15,
+                        severity="medium",
+                    )
+                    evidence.append(ev)
+                    findings.append(f"Targeting term '{keyword}' in {location}")
+
+        # Check for targeting evidence
+        targeting_evidence = [e for e in evidence if e.keyword in targeting]
+        if targeting_evidence:
             score = max(score, 0.5)
-            findings.append("Content may be targeting specific individuals")
 
         # Comedy-specific risks - standup often uses slurs
         comedy_risks = [
@@ -423,11 +590,25 @@ class HarassmentAnalyzer(BaseAnalyzer):
             "comedian",
             "open mic",
             "crowd work",
-            " roast",
+            "roast",
             "bantai",
         ]
-        comedy_count = sum(1 for kw in comedy_risks if kw in text_lower)
-        if comedy_count > 0 and harassment_count > 0:
+        comedy_evidence = []
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in comedy_risks:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.1,
+                        severity="low",
+                    )
+                    comedy_evidence.append(ev)
+        if comedy_evidence and harassment_count > 0:
+            evidence.extend(comedy_evidence)
             score = max(score, 0.7)
             findings.append(
                 "Comedy content with potential slurs - review for offensive language"
@@ -444,24 +625,38 @@ class HarassmentAnalyzer(BaseAnalyzer):
             score=score,
             risk_level=RiskLevel.SAFE,
             findings=findings,
+            evidence=evidence,
             recommendations=recommendations,
         )
 
 
 class PrivacyAnalyzer(BaseAnalyzer):
+    def _get_context(self, text: str, keyword: str, window: int = 50) -> str:
+        text_lower = text.lower()
+        idx = text_lower.find(keyword.lower())
+        if idx == -1:
+            return keyword
+        start = max(0, idx - window)
+        end = min(len(text), idx + len(keyword) + window)
+        context = text[start:end].strip()
+        return "..." + context + "..." if start > 0 or end < len(text) else context
+
     def analyze(
         self, metadata: Optional[VideoMetadata], data: Optional[Dict]
     ) -> AnalysisResult:
         score = 0.0
         findings = []
+        evidence = []
 
-        text_content = ""
+        # Prepare text sources
+        sources = {}
         if metadata:
-            text_content = (
-                f"{metadata.title} {metadata.description} {' '.join(metadata.tags)}"
-            )
-
-        text_lower = text_content.lower()
+            if metadata.title:
+                sources["title"] = metadata.title
+            if metadata.description:
+                sources["description"] = metadata.description
+            if metadata.tags:
+                sources["tags"] = ", ".join(metadata.tags)
 
         privacy_keywords = [
             "leak",
@@ -474,17 +669,58 @@ class PrivacyAnalyzer(BaseAnalyzer):
             "aadhaar",
             "pan card",
             "bank",
+            "secret",
+            "hidden",
+            "bathroom",
+            "changing room",
+            "voyeur",
+            "spy cam",
+            "hidden camera",
         ]
 
-        privacy_count = sum(1 for kw in privacy_keywords if kw in text_lower)
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in privacy_keywords:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    severity = (
+                        "high"
+                        if keyword in ["voyeur", "hidden camera", "spy cam", "bathroom"]
+                        else "medium"
+                    )
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.25,
+                        severity=severity,
+                    )
+                    evidence.append(ev)
+                    findings.append(f"Found '{keyword}' in {location}")
+
+        privacy_count = len(evidence)
         if privacy_count >= 1:
             score = min(1.0, 0.6 + privacy_count * 0.1)
-            findings.append("Privacy-sensitive information indicators")
 
-        # Hidden camera indicators
-        if "hidden camera" in text_lower or "voyeur" in text_lower:
+        # Hidden camera indicators - critical
+        hidden_critical = ["voyeur", "hidden camera", "spy cam"]
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in hidden_critical:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.35,
+                        severity="critical",
+                    )
+                    evidence.append(ev)
+                    findings.append(f"CRITICAL: {keyword} detected in {location}")
+
+        if any(e.keyword in hidden_critical for e in evidence):
             score = max(score, 0.8)
-            findings.append("Hidden camera content detected - HIGH RISK")
 
         recommendations = []
         if score > 0.3:
@@ -497,6 +733,7 @@ class PrivacyAnalyzer(BaseAnalyzer):
             score=score,
             risk_level=RiskLevel.SAFE,
             findings=findings,
+            evidence=evidence,
             recommendations=recommendations,
         )
 
@@ -551,6 +788,16 @@ class WomenSafetyAnalyzer(BaseAnalyzer):
     This is the most critical category for the platform.
     """
 
+    def _get_context(self, text: str, keyword: str, window: int = 50) -> str:
+        text_lower = text.lower()
+        idx = text_lower.find(keyword.lower())
+        if idx == -1:
+            return keyword
+        start = max(0, idx - window)
+        end = min(len(text), idx + len(keyword) + window)
+        context = text[start:end].strip()
+        return "..." + context + "..." if start > 0 or end < len(text) else context
+
     # Specific patterns for women's safety concerns in India
     UNSAFE_PORTRAYAL = [
         "victim",
@@ -595,66 +842,118 @@ class WomenSafetyAnalyzer(BaseAnalyzer):
         "appearance",
     ]
 
+    VOYEUR_KEYWORDS = [
+        "bathroom",
+        "changing room",
+        "college",
+        "hostel",
+        "bedroom",
+        "sleeping",
+        "without consent",
+        "secret",
+        "prank",
+    ]
+
     def analyze(
         self, metadata: Optional[VideoMetadata], data: Optional[Dict]
     ) -> AnalysisResult:
         score = 0.0
         findings = []
+        evidence = []
 
-        text_content = ""
+        # Prepare text sources
+        sources = {}
         if metadata:
-            text_content = (
-                f"{metadata.title} {metadata.description} {' '.join(metadata.tags)}"
-            )
-
+            if metadata.title:
+                sources["title"] = metadata.title
+            if metadata.description:
+                sources["description"] = metadata.description
+            if metadata.tags:
+                sources["tags"] = ", ".join(metadata.tags)
         if data and "transcript" in data:
-            text_content += " " + data["transcript"]
+            sources["transcript"] = data["transcript"]
 
-        text_lower = text_content.lower()
+        # Check for unsafe portrayal
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in self.UNSAFE_PORTRAYAL:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.25,
+                        severity="high",
+                    )
+                    evidence.append(ev)
+                    findings.append(f"Unsafe portrayal: '{keyword}' in {location}")
 
-        # Check women safety indicators
-        women_keywords_count = sum(
-            1 for kw in self.WOMEN_SAFETY_KEYWORDS if kw in text_lower
-        )
+        # Check for glorification patterns
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in self.GLORIFICATION:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.15,
+                        severity="medium",
+                    )
+                    evidence.append(ev)
+                    findings.append(f"Challenge/prank: '{keyword}' in {location}")
 
-        # Analyze context around women-related terms
-        unsafe_count = sum(1 for kw in self.UNSAFE_PORTRAYAL if kw in text_lower)
-        glorification_count = sum(1 for kw in self.GLORIFICATION if kw in text_lower)
-        exploitation_count = sum(1 for kw in self.EXPLOITATION if kw in text_lower)
-        body_shame_count = sum(1 for kw in self.BODY_SHAMING if kw in text_lower)
+        # Check for exploitation patterns
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in self.EXPLOITATION:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.15,
+                        severity="medium",
+                    )
+                    evidence.append(ev)
+                    findings.append(f"Exploitation risk: '{keyword}' in {location}")
+
+        # Check for voyeurism (CRITICAL)
+        voyeur_evidence = []
+        for location, text in sources.items():
+            text_lower = text.lower()
+            for keyword in self.VOYEUR_KEYWORDS:
+                if keyword in text_lower:
+                    context = self._get_context(text, keyword)
+                    severity = (
+                        "critical"
+                        if keyword in ["bathroom", "changing room"]
+                        else "high"
+                    )
+                    ev = Evidence(
+                        keyword=keyword,
+                        location=location,
+                        context=context,
+                        weight=0.3,
+                        severity=severity,
+                    )
+                    voyeur_evidence.append(ev)
+                    findings.append(f"CRITICAL: '{keyword}' in {location}")
+
+        if len(voyeur_evidence) >= 2:
+            score = max(score, 0.9)
+            evidence.extend(voyeur_evidence)
 
         # Calculate risk score
-        if unsafe_count > 0:
+        if len([e for e in evidence if e.keyword in self.UNSAFE_PORTRAYAL]) > 0:
             score = max(score, 0.7)
-            findings.append(f"Unsafe portrayal patterns detected - REQUIRES REVIEW")
-
-        if exploitation_count >= 2 and women_keywords_count >= 3:
+        if len([e for e in evidence if e.keyword in self.EXPLOITATION]) >= 2:
             score = max(score, 0.65)
-            findings.append("Potential exploitation of women - review required")
-
-        if body_shame_count >= 3:
-            score = max(score, 0.5)
-            findings.append("Body shaming language detected")
-
-        if glorification_count >= 2:
+        if len([e for e in evidence if e.keyword in self.GLORIFICATION]) >= 2:
             score = max(score, 0.55)
-            findings.append("Potentially harmful challenges/pranks detected")
-
-        # Voyeurism check
-        voyeur_keywords = [
-            "bathroom",
-            "changing room",
-            "college",
-            "hostel",
-            "bedroom",
-            "sleeping",
-            "without consent",
-            "secret",
-        ]
-        voyeur_count = sum(1 for kw in voyeur_keywords if kw in text_lower)
-        if voyeur_count >= 2:
-            score = max(score, 0.9)
-            findings.append("CRITICAL: Potential voyeurism content detected!")
 
         # Recommendations
         recommendations = []
@@ -690,6 +989,7 @@ class WomenSafetyAnalyzer(BaseAnalyzer):
             score=score,
             risk_level=risk_level,
             findings=findings,
+            evidence=evidence,
             recommendations=recommendations,
         )
 
