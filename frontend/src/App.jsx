@@ -2,6 +2,8 @@ import { useState } from 'react'
 import Header from './components/Header'
 import HeroSection from './components/HeroSection'
 import VideoInput from './components/VideoInput'
+import YouTubeInput from './components/YouTubeInput'
+import YouTubePreview from './components/YouTubePreview'
 import AnalysisDashboard from './components/AnalysisDashboard'
 import SafetyQuiz from './components/SafetyQuiz'
 import Footer from './components/Footer'
@@ -80,20 +82,35 @@ const SAMPLE_ANALYSIS = {
   }
 }
 
+// Quick analysis based on content type
+const QUICK_ANALYSIS = {
+  youtube_video: {
+    women_safety: { score: 0.55, risk_level: 'medium', findings: ['Analyze video content'] },
+    violence: { score: 0.3, risk_level: 'low', findings: [] },
+    sexual_content: { score: 0.15, risk_level: 'safe', findings: [] },
+    harassment: { score: 0.25, risk_level: 'low', findings: [] },
+    privacy: { score: 0.4, risk_level: 'low', findings: ['Check for personal info'] },
+    legal: { score: 0.6, risk_level: 'low', findings: [] },
+    cultural_sensitivity: { score: 0.2, risk_level: 'safe', findings: [] },
+    self_harm: { score: 0.0, risk_level: 'safe', findings: [] },
+    dangerous_activities: { score: 0.15, risk_level: 'safe', findings: [] },
+    misinformation: { score: 0.1, risk_level: 'safe', findings: [] }
+  }
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState('analyzer')
+  const [inputMode, setInputMode] = useState('text') // 'text' or 'youtube'
   const [videoData, setVideoData] = useState(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [analysisResults, setAnalysisResults] = useState(null)
 
-  const handleAnalyze = async (data) => {
-    setVideoData(data)
+  const handleTextAnalyze = async (data) => {
+    setVideoData({ type: 'text', ...data })
     setIsAnalyzing(true)
     
-    // Simulate analysis delay
     await new Promise(resolve => setTimeout(resolve, 2000))
     
-    // Calculate overall score
     const scores = Object.values(SAMPLE_ANALYSIS).map(s => s.score)
     const overall = scores.reduce((a, b) => a + b, 0) / scores.length
     
@@ -102,6 +119,63 @@ function App() {
       overall: overall,
       verdict: overall < 0.3 ? 'safe' : overall < 0.5 ? 'warning' : 'danger',
       score: (overall * 100).toFixed(0)
+    })
+    
+    setIsAnalyzing(false)
+  }
+
+  const handleYouTubeAnalyze = async (data) => {
+    setVideoData(data)
+    setIsAnalyzing(true)
+    
+    // Simulate API call to backend
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    
+    // Analyze based on quick check
+    const analysis = QUICK_ANALYSIS.youtube_video
+    
+    // Add category names
+    const categoryNames = {
+      women_safety: 'Women Safety',
+      violence: 'Violence',
+      sexual_content: 'Sexual Content',
+      harassment: 'Harassment',
+      privacy: 'Privacy',
+      legal: 'Legal Compliance',
+      cultural_sensitivity: 'Cultural Sensitivity',
+      self_harm: 'Self-Harm',
+      dangerous_activities: 'Dangerous Activities',
+      misinformation: 'Misinformation'
+    }
+    
+    const categories = {}
+    for (const [key, value] of Object.entries(analysis)) {
+      categories[key] = {
+        category: categoryNames[key],
+        ...value
+      }
+    }
+    
+    // Calculate overall
+    const scores = Object.values(categories).map(s => s.score)
+    const overall = scores.reduce((a, b) => a + b, 0) / scores.length
+    
+    setAnalysisResults({
+      categories,
+      overall,
+      verdict: overall < 0.3 ? 'safe' : overall < 0.5 ? 'warning' : 'danger',
+      score: (overall * 100).toFixed(0),
+      quick_check: {
+        risk_score: overall,
+        verdict: overall < 0.3 ? 'LIKELY SAFE' : overall < 0.5 ? 'CAUTION' : 'REVIEW NEEDED',
+        color: overall < 0.3 ? '#22c55e' : overall < 0.5 ? '#eab308' : '#f97316',
+        detected_keywords: ['video content'],
+        recommendation: overall < 0.3 
+          ? 'Content appears safe. Full analysis recommended.'
+          : overall < 0.5
+          ? 'Some risk factors detected. Review content.'
+          : 'Multiple risk factors. Manual review recommended.'
+      }
     })
     
     setIsAnalyzing(false)
@@ -116,7 +190,68 @@ function App() {
           {activeTab === 'analyzer' && (
             <>
               <HeroSection />
-              <VideoInput onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing} />
+              
+              {/* Input Mode Toggle */}
+              <div className="flex justify-center mb-8">
+                <div className="inline-flex bg-white/10 rounded-xl p-1">
+                  <button
+                    onClick={() => { setInputMode('youtube'); setAnalysisResults(null); }}
+                    className={`px-6 py-3 rounded-lg font-medium transition-all ${
+                      inputMode === 'youtube'
+                        ? 'bg-red-500/20 text-red-400'
+                        : 'text-secondary hover:text-white'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0C.488 3.45.029 5.804 0 12c.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0C23.512 20.55 23.971 18.196 24 12c-.029-6.185-.484-8.549-4.385-8.816zM9 16V8l8 3.993L9 16z"/>
+                      </svg>
+                      YouTube Link
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => { setInputMode('text'); setAnalysisResults(null); }}
+                    className={`px-6 py-3 rounded-lg font-medium transition-all ${
+                      inputMode === 'text'
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : 'text-secondary hover:text-white'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                      Text Input
+                    </span>
+                  </button>
+                </div>
+              </div>
+              
+              {/* YouTube Mode */}
+              {inputMode === 'youtube' && (
+                <>
+                  <YouTubeInput 
+                    onAnalyze={handleYouTubeAnalyze} 
+                    isAnalyzing={isAnalyzing} 
+                  />
+                  {(videoData?.type === 'youtube' || analysisResults) && (
+                    <YouTubePreview 
+                      videoData={videoData} 
+                      analysisResults={analysisResults} 
+                    />
+                  )}
+                </>
+              )}
+              
+              {/* Text Mode */}
+              {inputMode === 'text' && (
+                <VideoInput 
+                  onAnalyze={handleTextAnalyze} 
+                  isAnalyzing={isAnalyzing} 
+                />
+              )}
+              
+              {/* Analysis Results */}
               {analysisResults && (
                 <AnalysisDashboard 
                   videoData={videoData} 
@@ -188,8 +323,8 @@ function AboutSection() {
             <div className="flex gap-4">
               <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-500 flex items-center justify-center font-bold">1</div>
               <div>
-                <h4 className="font-semibold">Enter Video Details</h4>
-                <p className="text-sm text-secondary">Title, description, and tags help us analyze content</p>
+                <h4 className="font-semibold">Enter Video or YouTube Link</h4>
+                <p className="text-sm text-secondary">Paste a YouTube URL or enter video details</p>
               </div>
             </div>
             <div className="flex gap-4">
