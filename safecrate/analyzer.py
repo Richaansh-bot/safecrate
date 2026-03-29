@@ -207,10 +207,15 @@ class BaseAnalyzer:
         "nsfw",
         "hot",
         "bedroom",
-        # Hindi/Indian context
+        # Hindi/Indian context (slang)
         "nanga",
         "chotha",
         "gaand",
+        "lund",
+        "chut",
+        "bhosda",
+        "gaand mara",
+        "lund mara",
     ]
 
     HARASSMENT_KEYWORDS = [
@@ -230,6 +235,16 @@ class BaseAnalyzer:
         "dhat",
         "behenchod",
         "bhenchod",
+        "madarchod",
+        "bhadwa",
+        "kutta",
+        "saala",
+        "chutiya",
+        "bsdk",
+        "harami",
+        "randi",
+        "nautanki",
+        "haggu",
     ]
 
     WOMEN_SAFETY_KEYWORDS = [
@@ -328,18 +343,28 @@ class SexualContentAnalyzer(BaseAnalyzer):
                 f"{metadata.title} {metadata.description} {' '.join(metadata.tags)}"
             )
 
+        # Also check transcript if available
+        if data and "transcript" in data:
+            text_content += " " + data["transcript"]
+
         text_lower = text_content.lower()
 
         # Check for sexual content indicators
         sexual_count = sum(1 for kw in self.SEXUAL_KEYWORDS if kw in text_lower)
-        if sexual_count >= 2:
-            score = min(1.0, 0.5 + (sexual_count - 2) * 0.15)
+        if sexual_count >= 1:
+            score = min(1.0, 0.5 + sexual_count * 0.15)
             findings.append(
                 f"Sexual content indicators detected ({sexual_count} terms)"
             )
 
         # Age-restricted indicators
-        age_restricted = ["18+", "adult", "mature", "parental guidance"]
+        age_restricted = [
+            "18+",
+            "adult",
+            "mature",
+            "parental guidance",
+            "explicit content",
+        ]
         if any(ind in text_lower for ind in age_restricted):
             score = max(score, 0.4)
             findings.append("Age-restricted content markers found")
@@ -372,19 +397,41 @@ class HarassmentAnalyzer(BaseAnalyzer):
                 f"{metadata.title} {metadata.description} {' '.join(metadata.tags)}"
             )
 
+        # Also check transcript if available
+        if data and "transcript" in data:
+            text_content += " " + data["transcript"]
+
         text_lower = text_content.lower()
 
         # Check for harassment indicators
         harassment_count = sum(1 for kw in self.HARASSMENT_KEYWORDS if kw in text_lower)
         if harassment_count >= 1:
             score = min(1.0, 0.6 + harassment_count * 0.1)
-            findings.append(f"Potential harassment language detected")
+            findings.append(
+                f"Potential harassment language detected ({harassment_count} terms)"
+            )
 
         # Targeting indicators
         targeting = ["against", "target", "expose", "call out", "shame"]
         if any(ind in text_lower for ind in targeting):
             score = max(score, 0.5)
             findings.append("Content may be targeting specific individuals")
+
+        # Comedy-specific risks - standup often uses slurs
+        comedy_risks = [
+            "standup",
+            "comedian",
+            "open mic",
+            "crowd work",
+            " roast",
+            "bantai",
+        ]
+        comedy_count = sum(1 for kw in comedy_risks if kw in text_lower)
+        if comedy_count > 0 and harassment_count > 0:
+            score = max(score, 0.7)
+            findings.append(
+                "Comedy content with potential slurs - review for offensive language"
+            )
 
         recommendations = []
         if score > 0.3:

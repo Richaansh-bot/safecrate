@@ -21,9 +21,10 @@ try:
     import yt_dlp
 
     YT_DLP_AVAILABLE = True
-except ImportError:
+    print("[INIT] yt-dlp imported successfully")
+except ImportError as e:
     YT_DLP_AVAILABLE = False
-    print("Warning: yt-dlp not installed. Using fallback mode.")
+    print(f"[INIT] Warning: yt-dlp not installed. Using fallback mode. Error: {e}")
 
 # Import analysis modules
 import sys
@@ -129,22 +130,207 @@ async def fetch_youtube_metadata(video_id: str) -> dict:
     }
 
 
-def analyze_youtube_content(title: str, description: str, tags: list) -> dict:
+def fetch_youtube_transcript(video_url: str, max_retries: int = 3) -> tuple[str, bool]:
+    """
+    Fetch transcript/subtitles from YouTube video using yt-dlp.
+    Returns (transcript_text, success)
+    """
+    if not YT_DLP_AVAILABLE:
+        return "", False
+
+    transcript_text = ""
+    success = False
+
+    ydl_opts = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitlesformat": "vtt",
+    }
+
+    for attempt in range(max_retries):
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Extract info including available subtitles
+                info = ydl.extract_info(video_url, download=False)
+
+                if info:
+                    # Get video description as fallback context
+                    description = info.get("description", "") or ""
+
+                    # Try to get transcript using yt-dlp's transcript functionality
+                    try:
+                        # Get subtitles in VTT format by downloading to memory
+                        subtitles = info.get("subtitles", {}) or {}
+                        auto_captions = info.get("automatic_captions", {}) or {}
+
+                        # Combine manual and auto subtitles
+                        all_subs = {**auto_captions, **subtitles}
+
+                        if all_subs:
+                            # Try to get English subtitles first, then Hindi, then any available
+                            lang_codes = [
+                                "en",
+                                "en-US",
+                                "en-GB",
+                                "hi",
+                                "hi-orig",
+                                "mr",
+                                "a.en",
+                                "a.en-US",
+                            ]
+
+                            for lang in lang_codes:
+                                if lang in all_subs:
+                                    sub_entries = all_subs[lang]
+                                    if isinstance(sub_entries, list):
+                                        # Get subtitle URL with retry
+                                        for entry in sub_entries:
+                                            if (
+                                                isinstance(entry, dict)
+                                                and "url" in entry
+                                            ):
+                                                subtitle_url = entry["url"]
+                                                try:
+                                                    resp = httpx.get(
+                                                        subtitle_url, timeout=20
+                                                    )
+                                                    if resp.status_code == 200:
+                                                        vtt_content = resp.text
+                                                        # Check if it's actually VTT (not an error page)
+                                                        if not vtt_content.startswith(
+                                                            "<!DOCTYPE"
+                                                        ):
+                                                            transcript_text = (
+                                                                parse_vtt_to_text(
+                                                                    vtt_content
+                                                                )
+                                                            )
+                                                            if (
+                                                                transcript_text
+                                                                and len(transcript_text)
+                                                                > 50
+                                                            ):
+                                                                success = True
+                                                                print(
+                                                                    f"[TRANSCRIPT] Fetched {lang} subtitles ({len(transcript_text)} chars)"
+                                                                )
+                                                                break
+                                                        else:
+                                                            print(
+                                                                f"[TRANSCRIPT] Got error page for {lang}, trying next..."
+                                                            )
+                                                    elif resp.status_code == 429:
+                                                        # Rate limited - wait and retry
+                                                        import time
+
+                                                        wait_time = (attempt + 1) * 2
+                                                        print(
+                                                            f"[TRANSCRIPT] Rate limited, waiting {wait_time}s..."
+                                                        )
+                                                        time.sleep(wait_time)
+                                                        break  # Break inner loop to retry outer
+                                                    else:
+                                                        print(
+                                                            f"[TRANSCRIPT] HTTP {resp.status_code} for {lang}"
+                                                        )
+                                                except Exception as e:
+                                                    print(
+                                                        f"[TRANSCRIPT] Error fetching {lang}: {e}"
+                                                    )
+                                                    continue
+                                        if success:
+                                            break
+                    except Exception as e:
+                        print(f"Subtitle extraction error: {e}")
+
+                    # Include description if we have it
+                    if description:
+                        if transcript_text:
+                            transcript_text += (
+                                " [VIDEO DESCRIPTION] " + description[:2000]
+                            )
+                        elif (
+                            attempt == max_retries - 1
+                        ):  # Last attempt, use description as fallback
+                            transcript_text = (
+                                "[VIDEO DESCRIPTION] " + description[:2000]
+                            )
+                            success = True
+
+        except Exception as e:
+            print(f"yt-dlp error: {e}")
+
+        if success:
+            break
+
+        # Wait before retry
+        if attempt < max_retries - 1:
+            import time
+
+            wait = (attempt + 1) * 3
+            print(f"[TRANSCRIPT] Retry {attempt + 1}/{max_retries} in {wait}s...")
+            time.sleep(wait)
+
+    return transcript_text.strip(), success
+
+
+def parse_vtt_to_text(vtt_content: str) -> str:
+    """Parse VTT subtitle format to plain text."""
+    lines = vtt_content.split("\n")
+    text_lines = []
+
+    for line in lines:
+        # Skip VTT headers and timing lines
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("WEBVTT"):
+            continue
+        if "-->" in line:
+            continue
+        if line.startswith("NOTE"):
+            continue
+        if line.startswith("STYLE"):
+            continue
+        if line.startswith("REGION"):
+            continue
+        # Skip lines that are just numbers (cue identifiers)
+        if line.isdigit():
+            continue
+        # Clean HTML tags
+        import re
+
+        line = re.sub(r"<[^>]+>", "", line)
+        if line:
+            text_lines.append(line)
+
+    return " ".join(text_lines)
+
+
+def analyze_youtube_content(
+    title: str, description: str, tags: list, transcript: str = ""
+) -> dict:
     """Analyze content using Safecrate analyzers."""
     # Create metadata object
     metadata = VideoMetadata(
         title=title, description=description, tags=tags, language="en"
     )
 
+    # Prepare analysis data with transcript
+    analysis_data = {"transcript": transcript} if transcript else {}
+
     # Run analysis
-    analysis = analyzer.analyze(metadata=metadata)
+    analysis = analyzer.analyze(metadata=metadata, analysis_data=analysis_data)
 
     # Calculate scores
     scores = scorer.calculate_score(analysis)
 
     # Run compliance check
     compliance = compliance_checker.check_compliance(
-        title=title, description=description, tags=tags
+        title=title, description=description, tags=tags, transcript=transcript
     )
 
     # Format results
@@ -179,6 +365,7 @@ def analyze_youtube_content(title: str, description: str, tags: list) -> dict:
         "can_post": scores.get("can_post", False),
         "warnings": scores.get("warnings", []),
         "compliance": compliance,
+        "transcript_analyzed": bool(transcript),
     }
 
 
@@ -211,32 +398,54 @@ async def analyze_youtube(request: YouTubeAnalysisRequest):
         risk_keywords = {
             "prank": 0.15,
             "challenge": 0.1,
-            "roast": 0.2,
-            "girls": 0.1,
-            "college": 0.1,
-            "hot": 0.15,
-            "sexy": 0.25,
-            "expose": 0.2,
-            "leak": 0.25,
+            "roast": 0.25,
+            "girls": 0.15,
+            "college": 0.15,
+            "hot": 0.2,
+            "sexy": 0.3,
+            "expose": 0.25,
+            "leak": 0.3,
             "reaction": 0.1,
             "vlog": 0.05,
             "tutorial": 0.02,
             "music": 0.05,
             "comedy": 0.1,
+            "stand-up": 0.15,
+            "standup": 0.15,
+            "comedian": 0.15,
             "funny": 0.05,
             "dance": 0.05,
             "food": 0.03,
             "travel": 0.03,
             "gaming": 0.05,
+            "open mic": 0.1,
+            "crowd work": 0.1,
+            "crowd-work": 0.1,
+            "bantai": 0.1,
+            "pubg": 0.08,
+            "minecraft": 0.05,
+            "biology": 0.08,  # Biology class could be edgy
+            "class": 0.05,
         }
 
         for keyword, weight in risk_keywords.items():
             if keyword in title_lower:
                 tags.append(keyword)
 
-        # Run analysis
+        # Fetch transcript using yt-dlp
+        transcript = ""
+        transcript_fetched = False
+        if YT_DLP_AVAILABLE:
+            print(f"Fetching transcript for: {request.url}")
+            transcript, transcript_fetched = fetch_youtube_transcript(request.url)
+            if transcript_fetched:
+                print(f"Transcript fetched successfully ({len(transcript)} chars)")
+            else:
+                print("No transcript available for this video")
+
+        # Run analysis with transcript
         analysis = analyze_youtube_content(
-            title=metadata["title"], description="", tags=tags
+            title=metadata["title"], description="", tags=tags, transcript=transcript
         )
 
         # Determine quick verdict
@@ -347,8 +556,9 @@ if __name__ == "__main__":
     print("=" * 50)
     print("SAFECRATE API SERVER")
     print("=" * 50)
+    print(f"yt-dlp available: {YT_DLP_AVAILABLE}")
     print("Starting server...")
-    print("API Docs: http://localhost:8000/docs")
-    print("Frontend: http://localhost:8000")
+    print("API Docs: http://localhost:8001/docs")
+    print("Frontend: http://localhost:8001")
     print("=" * 50)
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8001, reload=False)
