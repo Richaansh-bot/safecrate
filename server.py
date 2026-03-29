@@ -26,6 +26,25 @@ except ImportError as e:
     YT_DLP_AVAILABLE = False
     print(f"[INIT] Warning: yt-dlp not installed. Using fallback mode. Error: {e}")
 
+# AssemblyAI for transcription
+try:
+    import assemblyai as aai
+
+    ASSEMBLYAI_AVAILABLE = True
+    print("[INIT] AssemblyAI SDK imported successfully")
+except ImportError as e:
+    ASSEMBLYAI_AVAILABLE = False
+    print(f"[INIT] Warning: AssemblyAI not installed. {e}")
+
+# Get API key from environment or use demo
+ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY", "")
+if ASSEMBLYAI_API_KEY:
+    print(f"[INIT] AssemblyAI API key found")
+else:
+    print(
+        "[INIT] AssemblyAI API key not set. Set ASSEMBLYAI_API_KEY env var for transcripts"
+    )
+
 # Import analysis modules
 import sys
 
@@ -310,6 +329,50 @@ def parse_vtt_to_text(vtt_content: str) -> str:
     return " ".join(text_lines)
 
 
+async def fetch_transcript_assemblyai(video_url: str) -> tuple[str, bool]:
+    """
+    Fetch transcript using AssemblyAI API.
+    AssemblyAI can directly transcribe YouTube videos.
+    Returns (transcript_text, success)
+    """
+    if not ASSEMBLYAI_AVAILABLE:
+        return "", False
+
+    if not ASSEMBLYAI_API_KEY:
+        return "", False
+
+    try:
+        import assemblyai as aai
+
+        print(f"[ASSEMBLYAI] Starting transcription for: {video_url}")
+
+        config = aai.TranscriptionConfig(
+            audio_start_from=0,
+            audio_end_at=120,  # First 2 minutes for speed
+            punctuate=True,
+            format_text=True,
+        )
+
+        transcriber = aai.Transcriber()
+        transcript = transcriber.transcribe(
+            video_url, config=config, api_key=ASSEMBLYAI_API_KEY
+        )
+
+        if transcript.status == aai.TranscriptStatus.error:
+            print(f"[ASSEMBLYAI] Error: {transcript.error}")
+            return "", False
+
+        if transcript.text:
+            print(f"[ASSEMBLYAI] Transcript fetched: {len(transcript.text)} chars")
+            return transcript.text, True
+
+        return "", False
+
+    except Exception as e:
+        print(f"[ASSEMBLYAI] Exception: {e}")
+        return "", False
+
+
 def analyze_youtube_content(
     title: str, description: str, tags: list, transcript: str = ""
 ) -> dict:
@@ -432,16 +495,33 @@ async def analyze_youtube(request: YouTubeAnalysisRequest):
             if keyword in title_lower:
                 tags.append(keyword)
 
-        # Fetch transcript using yt-dlp
+        # Fetch transcript - Try AssemblyAI first (better quality), then yt-dlp fallback
         transcript = ""
         transcript_fetched = False
-        if YT_DLP_AVAILABLE:
-            print(f"Fetching transcript for: {request.url}")
+        transcript_source = "none"
+
+        # Try AssemblyAI first if API key is available
+        if ASSEMBLYAI_AVAILABLE and ASSEMBLYAI_API_KEY:
+            print(f"[TRANSCRIPT] Trying AssemblyAI for: {request.url}")
+            transcript, transcript_fetched = await fetch_transcript_assemblyai(
+                request.url
+            )
+            if transcript_fetched:
+                transcript_source = "assemblyai"
+                print(f"[TRANSCRIPT] AssemblyAI success: {len(transcript)} chars")
+            else:
+                print("[TRANSCRIPT] AssemblyAI failed, trying yt-dlp...")
+
+        # Fall back to yt-dlp if AssemblyAI didn't work
+        if not transcript_fetched and YT_DLP_AVAILABLE:
+            print(f"[TRANSCRIPT] Trying yt-dlp for: {request.url}")
             transcript, transcript_fetched = fetch_youtube_transcript(request.url)
             if transcript_fetched:
-                print(f"Transcript fetched successfully ({len(transcript)} chars)")
-            else:
-                print("No transcript available for this video")
+                transcript_source = "ytdlp"
+                print(f"[TRANSCRIPT] yt-dlp success: {len(transcript)} chars")
+
+        if not transcript_fetched:
+            print("[TRANSCRIPT] No transcript available for this video")
 
         # Run analysis with transcript
         analysis = analyze_youtube_content(
@@ -532,6 +612,9 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "yt_dlp_available": YT_DLP_AVAILABLE,
+        "assemblyai_available": ASSEMBLYAI_AVAILABLE,
+        "assemblyai_configured": bool(ASSEMBLYAI_API_KEY),
+        "transcription_enabled": ASSEMBLYAI_AVAILABLE and bool(ASSEMBLYAI_API_KEY),
     }
 
 
