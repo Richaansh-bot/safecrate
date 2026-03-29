@@ -32,13 +32,13 @@ function App() {
     return () => clearInterval(interval)
   }, [])
 
-  const handleYouTubeAnalyze = async (data) => {
+  const handleYouTubeAnalyze = async (data, transcript = null) => {
     setVideoData(data)
     setIsAnalyzing(true)
     setAnalysisResults(null)
 
     try {
-      const result = await analyzeYouTube(data.url)
+      const result = await analyzeYouTube(data.url, transcript)
       
       if (result.success) {
         // Transform API response to match frontend format
@@ -78,6 +78,12 @@ function App() {
     }
 
     setIsAnalyzing(false)
+  }
+
+  const handleReanalyzeWithCaptions = async (captions) => {
+    if (!videoData) return
+    
+    await handleYouTubeAnalyze(videoData, captions)
   }
 
   const handleTextAnalyze = async (data) => {
@@ -179,7 +185,8 @@ function App() {
                   {(videoData?.type === 'youtube' || analysisResults) && (
                     <YouTubePreview 
                       videoData={videoData} 
-                      analysisResults={analysisResults} 
+                      analysisResults={analysisResults}
+                      onReanalyzeWithCaptions={handleReanalyzeWithCaptions}
                     />
                   )}
                 </>

@@ -5,14 +5,19 @@
 
 const API_BASE = 'http://localhost:8001/api'
 
-export async function analyzeYouTube(url) {
+export async function analyzeYouTube(url, transcript = null) {
   try {
+    const body = { url }
+    if (transcript) {
+      body.transcript = transcript
+    }
+    
     const response = await fetch(`${API_BASE}/analyze/youtube`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify(body),
     })
     
     if (!response.ok) {

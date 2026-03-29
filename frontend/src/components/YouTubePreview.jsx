@@ -1,11 +1,13 @@
+import { useState } from 'react'
 import { motion } from 'framer-motion'
+import YouTubeCaptionFetcher from './YouTubeCaptionFetcher'
 
-export default function YouTubePreview({ videoData, analysisResults }) {
+export default function YouTubePreview({ videoData, analysisResults, onReanalyzeWithCaptions }) {
   if (!videoData || videoData.type !== 'youtube') return null
 
   const { videoId } = videoData
   const embedUrl = `https://www.youtube.com/embed/${videoId}`
-  const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
+  const [captions, setCaptions] = useState(null)
 
   const quickCheck = analysisResults?.quick_check
   const videoInfo = analysisResults?.video_info
@@ -15,6 +17,13 @@ export default function YouTubePreview({ videoData, analysisResults }) {
     if (quickCheck.verdict === 'LIKELY SAFE') return 'bg-emerald-500'
     if (quickCheck.verdict === 'CAUTION') return 'bg-amber-500'
     return 'bg-red-500'
+  }
+
+  const handleCaptionsFound = (captionText) => {
+    setCaptions(captionText)
+    if (onReanalyzeWithCaptions) {
+      onReanalyzeWithCaptions(captionText)
+    }
   }
 
   return (
@@ -41,6 +50,22 @@ export default function YouTubePreview({ videoData, analysisResults }) {
           </div>
         )}
       </div>
+
+      {/* Caption Fetcher */}
+      <YouTubeCaptionFetcher 
+        videoId={videoId} 
+        onCaptionsFound={handleCaptionsFound}
+        disabled={!analysisResults}
+      />
+
+      {/* Captions Found Indicator */}
+      {captions && (
+        <div className="px-4 py-2 bg-emerald-500/10 border-t border-emerald-500/20">
+          <p className="text-xs text-emerald-400">
+            ✓ Captions loaded - Re-analyzing with transcript...
+          </p>
+        </div>
+      )}
 
       {/* Video Info */}
       {videoInfo && (
